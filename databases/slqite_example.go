@@ -6,6 +6,8 @@ import (
 	"sync"
 	"log"
 	"time"
+	"github.com/spouk/gocheats/utils"
+	"strings"
 )
 
 //---------------------------------------------------------------------------
@@ -15,7 +17,9 @@ type (
 	SqliteStock struct {
 		sync.WaitGroup
 		sync.RWMutex
-		DB *gorm.DB
+		DB         *gorm.DB
+		Randomizer *utils.Randomizer
+		Stock []*TestTable
 	}
 )
 
@@ -33,18 +37,19 @@ type (
 //---------------------------------------------------------------------------
 //  functions
 //---------------------------------------------------------------------------
-func NewSqliteStock(filenameDbs string) *SqliteStock {
+func NewSqliteStock(filenameDbs string, listTables []interface{}) *SqliteStock {
 	s := &SqliteStock{}
-	db, err := s.openDbs(filenameDbs)
+	db, err := s.openDbs(filenameDbs, listTables)
 	if err != nil {
 		log.Fatal(err)
 	}
 	s.DB = db
+	s.Randomizer = utils.NewRandomize()
 	return s
 }
 func (s *SqliteStock) openDbs(filenameDbs string, listTables []interface{}) (*gorm.DB, error) {
 	//create/open database
-	db, err := gorm.Open("sqlite", filenameDbs)
+	db, err := gorm.Open("sqlite3", filenameDbs)
 	if err != nil {
 		return nil, err
 	}
@@ -68,21 +73,101 @@ func (s *SqliteStock) openDbs(filenameDbs string, listTables []interface{}) (*go
 	//return result
 	return db, nil
 }
-func (s *SqliteStock) Run(countWriter, countReader int, timeTriger int) {
+func (s *SqliteStock) Run(countGenerator, countReader int, timeTriger int) {
 	var chanEnd = make(chan bool)
-	for x := 0; x < countWriter; x ++ {
+	//run single writer
+	s.Add(1)
+	go s.writerDBSsingle(chanEnd)
+	//run generators for stock
+	for x := 0; x < countGenerator; x ++ {
 		s.Add(1)
-		go s.writer(chanEnd)
+		go s.generatorStock(chanEnd, 1000)
 	}
+	//run reader from DBS
 	for x := 0; x < countReader; x ++ {
 		s.Add(1)
 		go s.reader(chanEnd)
 	}
 	var timer = time.NewTimer(time.Second * time.Duration(timeTriger))
 	<-timer.C
-
+	log.Print("CLOSE CHANNEL FOR EXIT WORKERS\n")
+	close(chanEnd)
+	s.Wait()
+	log.Print("all worker/reader end working")
 }
 func (s *SqliteStock) writer(chanEnd chan bool) {
+	defer s.Done()
+	for {
+		select {
+		case <-chanEnd:
+			return
+		default:
+			var email = []string{s.Randomizer.RandomString(10), "@", s.Randomizer.RandomString(10), ".ru"}
 
+			if err := s.DB.Create(&TestTable{Password: s.Randomizer.RandomString(10), Email: strings.Join(email, "")}); err != nil {
+				log.Print(err)
+			}
+			time.Sleep(time.Second * 1)
+		}
+	}
 }
-func (s *SqliteStock) reader(chanEnd chan bool) {}
+func (s *SqliteStock) reader(chanEnd chan bool) {
+	defer s.Done()
+	for {
+		select {
+		case <-chanEnd:
+			return
+		default:
+			var lists []TestTable
+			if err := s.DB.Find(&lists).Error; err != nil {
+				log.Print(err)
+			} else {
+				log.Printf("Count: %d\n", len(lists))
+			}
+			time.Sleep(time.Second * 1)
+		}
+	}
+}
+func (s *SqliteStock) generatorStock(chanEnd chan bool, countGenerator int) {
+	defer s.Done()
+	var trigger = 0
+	for {
+		select {
+		case <- chanEnd:
+			return
+		default:
+			if trigger < countGenerator {
+				trigger ++
+				s.Lock()
+				var email = strings.Join([]string{s.Randomizer.RandomString(10), "@", s.Randomizer.RandomString(10), ".ru"}, "")
+				s.Stock = append(s.Stock, &TestTable{Email:email, Password: s.Randomizer.RandomString(10)})
+				s.Unlock()
+				time.Sleep(time.Microsecond * 500)
+			} else {
+				log.Print("[generatorStock] END WORK\n")
+				return
+			}
+		}
+	}
+}
+func (s *SqliteStock) writerDBSsingle(chanEdn chan bool) {
+	defer s.Done()
+	for {
+		select {
+		case <- chanEdn:
+			return
+		default:
+			if len(s.Stock) > 0 {
+				//get element
+				s.Lock()
+				var element = s.Stock[0]
+				s.Stock = append(s.Stock[:0], s.Stock[0+1:]...)
+				s.Unlock()
+				//write to dbs
+				if err := s.DB.Create(element); err != nil {
+					log.Print(err)
+				}
+			}
+		}
+	}
+}
