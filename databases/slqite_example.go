@@ -8,6 +8,7 @@ import (
 	"time"
 	"github.com/spouk/gocheats/utils"
 	"strings"
+	"fmt"
 )
 
 //---------------------------------------------------------------------------
@@ -20,8 +21,8 @@ type (
 		DB         *gorm.DB
 		Randomizer *utils.Randomizer
 		Stock      []*TestTable
-		StockRead  []*TestTable
-		StockWrite []*TestTable
+		StockRead  []TestTable
+		StockWrite []TestTable
 		endChan    chan bool
 	}
 )
@@ -31,7 +32,7 @@ type (
 //---------------------------------------------------------------------------
 type (
 	TestTable struct {
-		ID       int64
+		ID       uint
 		Email    string
 		Password string
 		ExHash   string
@@ -84,6 +85,27 @@ func (s *SqliteStock) openDbs(filenameDbs string, listTables []interface{}) (*go
 //  пример работы при ситуации 1 генератор данных в базу данных
 //
 //---------------------------------------------------------------------------
+func (s *SqliteStock) RunerGeneratorWorkerDBS(countWorker int) {
+	//run generator
+	s.Add(1)
+	go s.generator()
+	//run workerDBS
+	s.Add(1)
+	go s.workerDBS()
+	//run workers
+	for i := 0; i < countWorker; i ++ {
+		s.Add(1)
+		go s.workerExample(fmt.Sprintf("W#%d", i))
+	}
+	var triggerEnd = time.NewTimer(time.Second * 5)
+	<-triggerEnd.C
+	close(s.endChan)
+	s.Wait()
+	log.Println("THE END")
+	for i, x := range s.StockWrite {
+		fmt.Printf("[%d]::: %v\n", i, x)
+	}
+}
 func (s *SqliteStock) generator() {
 	log.Println("generator starting")
 	defer func() {
@@ -92,19 +114,196 @@ func (s *SqliteStock) generator() {
 	}()
 	for {
 		select {
-		case <- s.endChan:
+		case <-s.endChan:
 			return
 		default:
 			var email = []string{s.Randomizer.RandomString(10), "@", s.Randomizer.RandomString(10), ".ru"}
-			element := &TestTable{Password: s.Randomizer.RandomString(10), Email: strings.Join(email, ""),Active: false}
+			element := TestTable{Password: s.Randomizer.RandomString(10), Email: strings.Join(email, ""), Active: false}
+			s.Lock()
 			s.StockWrite = append(s.StockWrite, element)
-			log.Println("[generator] make count records : %d\n", len(s.StockWrite))
+			s.Unlock()
 			time.Sleep(time.Second * 1)
 		}
 	}
 
 }
+func (s *SqliteStock) workerDBS() {
+	log.Println("workerDBS starting")
+	//чтение из базы данных всех записей, что имеет статус Active:False и размещение их в StockWrite
+	var records []TestTable
+	if err := s.DB.Where(&TestTable{Active: false}).Find(&records).Error; err != nil {
+		log.Fatal(err)
+	}
+	if len(records) > 0 {
+		for _, x := range records {
+			s.StockRead = append(s.StockRead, x)
+		}
+	}
 
+	defer func() {
+		s.Done()
+		log.Println("workerDBS end")
+	}()
+	for {
+		select {
+		case <-s.endChan:
+			return
+		default:
+			//проверка стока новых записей для проверки и внесения в базу данных + в сток для рабочих для обработки
+			if len(s.StockWrite) > 0 {
+
+				for i := 0; i < len(s.StockWrite); i++ {
+					var element = s.StockWrite[0]
+					s.StockWrite = append(s.StockWrite[:i], s.StockWrite[i+1:]...)
+					i--
+					fmt.Printf("Element: %v\n", element)
+
+					switch element.Active {
+					case false:
+						var allrecords []TestTable
+						if err := s.DB.Find(&allrecords).Error; err != nil {
+							log.Fatal(err)
+						}
+						if len(allrecords) > 0 {
+							for _, x := range allrecords {
+								if x.Email == element.Email {
+									fmt.Printf("DUBLICATE\n")
+								} else {
+									if err := s.DB.Create(&element).Error; err != nil {
+										log.Println(err)
+									}
+								}
+							}
+						}  else {
+							if err := s.DB.Create(&element).Error; err != nil {
+								log.Println(err)
+							}
+
+						}
+
+						s.Lock()
+						s.StockRead = append(s.StockRead, element)
+						s.Unlock()
+
+					case true:
+
+						if err := s.DB.Save(&element).Error; err != nil {
+							log.Println(err)
+						}
+					default:
+						fmt.Printf("WRONG VALUE `ACTIVE`\n")
+					}
+
+				}
+			}
+			time.Sleep(time.Second * 1)
+
+			////проверка на аттрибут
+			////делаю выборку из базы данных всех записей
+			//var allrecords []*TestTable
+			//if err := s.DB.Find(&allrecords).Error; err != nil {
+			//	log.Fatal(err)
+			//}
+			////обработка записей с базы данных и сверка с новой записью в стоке с новыми записями
+			//for i:=0; i < len(s.StockWrite); i++ {
+			//
+			//	switch s.StockWrite[i].Active {
+			//	case false:
+			//		//элемент поступил от генератора, значит его надо проверить на дублирование в базе данных, можно через unique,
+			//		// но тут ради эмуляции модели работы, если этого элемента нет в базе данных он заносится в базу данных и размещается
+			//		// в стоке для рабочих для обработки
+			//		// в дальнейшем при запуске программы надо считывать данные из базы данных всех элементов, что имеет статус false и заносить
+			//		// их в рабочих сток
+			//		if len(records) > 0 {
+			//			for _, z := range allrecords {
+			//				fmt.Printf(">>[%d]  %v\n",len(s.StockWrite), s.StockWrite[i])
+			//				if z.Email == s.StockWrite[i].Email {
+			//					log.Println("HAVE DUBLICATE")
+			//				} else {
+			//
+			//					//заносим новую запись в базу данных
+			//					log.Println("Write new Record")
+			//					if err := s.DB.Create(&s.StockWrite[i]).Error; err != nil {
+			//						log.Println(err)
+			//					}
+			//					s.Lock()
+			//					//заносим элемент в рабочий сток
+			//					s.StockRead = append(s.StockRead, s.StockWrite[i])
+			//					//удаляю занесенный элемент
+			//					s.StockWrite = append(s.StockWrite[:i], s.StockWrite[i+1:]...)
+			//					s.Unlock()
+			//					i--
+			//				}
+			//			}
+			//
+			//
+			//
+			//		} else {
+			//			//заносим новую запись в базу данных
+			//			log.Println("Write new Record[else]")
+			//			if err := s.DB.Create(&s.StockWrite[i]).Error; err != nil {
+			//				log.Println(err)
+			//			}
+			//			//заносим элемент в рабочий сток
+			//			s.Lock()
+			//			//заносим элемент в рабочий сток
+			//			s.StockRead = append(s.StockRead, s.StockWrite[i])
+			//			//удаляю занесенный элемент
+			//			s.StockWrite = append(s.StockWrite[:i], s.StockWrite[i+1:]...)
+			//			s.Unlock()
+			//			i--
+			//
+			//		}
+			//
+			//	case true:
+			//		//элемент от рабочего, кто обработал элемент из StockRead, просто элемент обновляется в базе данных
+			//		if err := s.DB.Save(s.StockWrite[i]).Error; err != nil {
+			//			log.Println(err)
+			//		}
+			//		s.Lock()
+			//		s.StockWrite = append(s.StockWrite, s.StockWrite[i])
+			//		s.StockWrite = append(s.StockWrite[:i], s.StockWrite[i+1:]...)
+			//		s.Unlock()
+			//		i--
+			//
+			//	default:
+			//		log.Println("ERROR `ACTIVE` atribute")
+			//	}
+			//}
+
+		}
+	}
+}
+func (s *SqliteStock) workerExample(name string) {
+	log.Println(fmt.Sprintf("worker `%s` starting", name))
+	defer func() {
+		s.Done()
+		log.Println(fmt.Sprintf("worker `%s` end", name))
+	}()
+	for {
+		select {
+		case <-s.endChan:
+			return
+		default:
+			if len(s.StockRead) > 0 {
+				s.Lock()
+				var element = s.StockRead[0]
+				//s.StockRead = s.StockRead[:len(s.StockRead) - 1]
+				s.Unlock()
+				element.ExHash = "Some Example value" + s.Randomizer.RandomStringChoice(20, utils.Lhexdigits)
+				s.Lock()
+				s.StockWrite = append(s.StockWrite, element)
+				s.Unlock()
+			} else {
+				time.Sleep(time.Microsecond * 100)
+			}
+
+			log.Printf("[generator] make count records : %d\n", len(s.StockWrite))
+			time.Sleep(time.Second * 1)
+		}
+	}
+
+}
 
 //---------------------------------------------------------------------------
 //  run запуск проверки работы совместной работы в WAL режиме при 1 писателя и
