@@ -19,7 +19,10 @@ type (
 		sync.RWMutex
 		DB         *gorm.DB
 		Randomizer *utils.Randomizer
-		Stock []*TestTable
+		Stock      []*TestTable
+		StockRead  []*TestTable
+		StockWrite []*TestTable
+		endChan    chan bool
 	}
 )
 
@@ -31,6 +34,8 @@ type (
 		ID       int64
 		Email    string
 		Password string
+		ExHash   string
+		Active   bool
 	}
 )
 
@@ -43,6 +48,7 @@ func NewSqliteStock(filenameDbs string, listTables []interface{}) *SqliteStock {
 	if err != nil {
 		log.Fatal(err)
 	}
+	s.endChan = make(chan bool)
 	s.DB = db
 	s.Randomizer = utils.NewRandomize()
 	return s
@@ -73,6 +79,38 @@ func (s *SqliteStock) openDbs(filenameDbs string, listTables []interface{}) (*go
 	//return result
 	return db, nil
 }
+
+//---------------------------------------------------------------------------
+//  пример работы при ситуации 1 генератор данных в базу данных
+//
+//---------------------------------------------------------------------------
+func (s *SqliteStock) generator() {
+	log.Println("generator starting")
+	defer func() {
+		s.Done()
+		log.Println("generator end")
+	}()
+	for {
+		select {
+		case <- s.endChan:
+			return
+		default:
+			var email = []string{s.Randomizer.RandomString(10), "@", s.Randomizer.RandomString(10), ".ru"}
+			element := &TestTable{Password: s.Randomizer.RandomString(10), Email: strings.Join(email, ""),Active: false}
+			s.StockWrite = append(s.StockWrite, element)
+			log.Println("[generator] make count records : %d\n", len(s.StockWrite))
+			time.Sleep(time.Second * 1)
+		}
+	}
+
+}
+
+
+//---------------------------------------------------------------------------
+//  run запуск проверки работы совместной работы в WAL режиме при 1 писателя и
+//  множестве читателей
+//---------------------------------------------------------------------------
+
 func (s *SqliteStock) Run(countGenerator, countReader int, timeTriger int) {
 	var chanEnd = make(chan bool)
 	//run single writer
@@ -133,14 +171,14 @@ func (s *SqliteStock) generatorStock(chanEnd chan bool, countGenerator int) {
 	var trigger = 0
 	for {
 		select {
-		case <- chanEnd:
+		case <-chanEnd:
 			return
 		default:
 			if trigger < countGenerator {
 				trigger ++
 				s.Lock()
 				var email = strings.Join([]string{s.Randomizer.RandomString(10), "@", s.Randomizer.RandomString(10), ".ru"}, "")
-				s.Stock = append(s.Stock, &TestTable{Email:email, Password: s.Randomizer.RandomString(10)})
+				s.Stock = append(s.Stock, &TestTable{Email: email, Password: s.Randomizer.RandomString(10)})
 				s.Unlock()
 				time.Sleep(time.Microsecond * 500)
 			} else {
@@ -154,7 +192,7 @@ func (s *SqliteStock) writerDBSsingle(chanEdn chan bool) {
 	defer s.Done()
 	for {
 		select {
-		case <- chanEdn:
+		case <-chanEdn:
 			return
 		default:
 			if len(s.Stock) > 0 {
