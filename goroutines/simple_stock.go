@@ -25,9 +25,12 @@ func NewManager() *Manager {
 	return m
 }
 func (m *Manager) Run(count, stockSize int, timeTrigger int) {
-	for x := 0; x <= stockSize; x++ {
-		m.Stock = append(m.Stock, m.r.RandomString(20))
-	}
+	//for x := 0; x <= stockSize; x++ {
+	//	m.Stock = append(m.Stock, m.r.RandomString(20))
+	//}
+	m.Add(1)
+	go m.generator()
+
 	for x := 0; x <= count; x++ {
 		m.Add(1)
 		go m.worker(fmt.Sprintf("worker#%d", x))
@@ -37,6 +40,20 @@ func (m *Manager) Run(count, stockSize int, timeTrigger int) {
 	close(m.endChan)
 	m.Wait()
 	fmt.Printf("END")
+}
+func (m *Manager) generator() {
+	defer m.Done()
+	for {
+		select {
+		case <- m.endChan:
+			return
+		default:
+			m.Lock()
+			m.Stock = append(m.Stock, m.r.RandomStringChoice(30, utils.Lhexdigits))
+			m.Unlock()
+			time.Sleep(time.Microsecond * 5000)
+		}
+	}
 }
 func (m *Manager) worker(name string) {
 	defer m.Done()
