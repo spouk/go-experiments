@@ -25,12 +25,12 @@ func (c *Core) Run(count int) {
 		c.Add(1)
 		go c.worker(fmt.Sprintf("W#%d", x))
 	}
-	var  timerEnd  = time.NewTimer(time.Second * 10 )
-	for {
-		select {
-
-		}
-	}
+	//var  timerEnd  = time.NewTimer(time.Second * 10 )
+	//for {
+	//	select {
+	//
+	//	}
+	//}
 
 }
 func (c *Core) worker(name string) {

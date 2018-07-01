@@ -170,13 +170,13 @@ func (s *SqliteStock) workerDBS() {
 									fmt.Printf("DUBLICATE\n")
 								} else {
 									if err := s.DB.Create(&element).Error; err != nil {
-										log.Println(err)
+										//log.Println(err)
 									}
 								}
 							}
 						}  else {
 							if err := s.DB.Create(&element).Error; err != nil {
-								log.Println(err)
+								//log.Println(err)
 							}
 
 						}
@@ -188,7 +188,7 @@ func (s *SqliteStock) workerDBS() {
 					case true:
 
 						if err := s.DB.Save(&element).Error; err != nil {
-							log.Println(err)
+							//log.Println(err)
 						}
 					default:
 						fmt.Printf("WRONG VALUE `ACTIVE`\n")
@@ -285,21 +285,31 @@ func (s *SqliteStock) workerExample(name string) {
 		case <-s.endChan:
 			return
 		default:
+			//fmt.Printf("STOCKREAD: %v\n", s.StockRead)
 			if len(s.StockRead) > 0 {
 				s.Lock()
-				var element = s.StockRead[0]
-				//s.StockRead = s.StockRead[:len(s.StockRead) - 1]
+				var element = TestTable{}
+				if len(s.StockRead) >= 1 {
+					element = s.StockRead[0]
+					s.StockRead = append(s.StockRead[:0], s.StockRead[1:]...)
+				} else {
+					element = s.StockRead[0]
+				}
 				s.Unlock()
-				element.ExHash = "Some Example value" + s.Randomizer.RandomStringChoice(20, utils.Lhexdigits)
-				s.Lock()
-				s.StockWrite = append(s.StockWrite, element)
-				s.Unlock()
+				if element.Active == false {
+					element.ExHash = "Some Example value" + s.Randomizer.RandomStringChoice(20, utils.Lhexdigits)
+					element.Active = true
+					s.Lock()
+					s.StockWrite = append(s.StockWrite, element)
+					s.Unlock()
+					log.Println(fmt.Sprintf("worker `%s` add element %v\n", name, element))
+				}
+
+
 			} else {
-				time.Sleep(time.Microsecond * 100)
+				time.Sleep(time.Microsecond * 200)
 			}
 
-			log.Printf("[generator] make count records : %d\n", len(s.StockWrite))
-			time.Sleep(time.Second * 1)
 		}
 	}
 
