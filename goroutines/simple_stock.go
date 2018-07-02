@@ -11,10 +11,14 @@ import (
 type Manager struct {
 	sync.RWMutex
 	sync.WaitGroup
-	Stock   []string
+	Stock   []Static
 	counter int64
 	r       *utils.Randomizer
 	endChan chan bool
+}
+type Static struct {
+	Name string
+	Hash string
 }
 
 func NewManager() *Manager {
@@ -49,7 +53,7 @@ func (m *Manager) generator() {
 			return
 		default:
 			m.Lock()
-			m.Stock = append(m.Stock, m.r.RandomStringChoice(30, utils.Lhexdigits))
+			m.Stock = append(m.Stock, Static{Name:m.r.RandomStringChoice(30, utils.Lhexdigits)})
 			m.Unlock()
 			time.Sleep(time.Microsecond * 5000)
 		}
