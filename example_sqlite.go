@@ -14,7 +14,6 @@ func main() {
 	//	fmt.Printf(" %v \n", r.RandomStringChoice(20, utils.LasciiLetters))
 	//}
 
-
 	var dbsfile  = "testdbs.dbs"
 	var listTables =[]interface{}{databases.TestTable{}}
 

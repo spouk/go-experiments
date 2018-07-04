@@ -1,24 +1,26 @@
 package goroutines
 
-import "sync"
 import (
 	"github.com/spouk/gocheats/utils"
 	"fmt"
 	"time"
 	"log"
+	"sync"
 )
 
 type Manager struct {
 	sync.RWMutex
 	sync.WaitGroup
-	Stock   []Static
-	counter int64
-	r       *utils.Randomizer
-	endChan chan bool
+	Stock    []Static
+	EndStock []Static
+	counter  int64
+	r        *utils.Randomizer
+	endChan  chan bool
 }
 type Static struct {
-	Name string
-	Hash string
+	Name   string
+	Hash   string
+	Active bool
 }
 
 func NewManager() *Manager {
@@ -49,12 +51,21 @@ func (m *Manager) generator() {
 	defer m.Done()
 	for {
 		select {
-		case <- m.endChan:
+		case <-m.endChan:
 			return
 		default:
+			//make new element to .Stock
 			m.Lock()
-			m.Stock = append(m.Stock, Static{Name:m.r.RandomStringChoice(30, utils.Lhexdigits)})
+			m.Stock = append(m.Stock, Static{Name: m.r.RandomStringChoice(30, utils.Lhexdigits)})
 			m.Unlock()
+			//check new elements in .EndStock
+			if len(m.EndStock) > 0 {
+				var element = m.EndStock[0]
+				m.Lock()
+				m.EndStock = append(m.EndStock[:0], m.EndStock[1:]...)
+				m.Unlock()
+				fmt.Printf("[generator][out] %v\n", element)
+			}
 			time.Sleep(time.Microsecond * 5000)
 		}
 	}
@@ -72,6 +83,13 @@ func (m *Manager) worker(name string) {
 				m.Stock = append(m.Stock[:0], m.Stock[1:]...)
 				m.counter++
 				m.Unlock()
+
+				element.Active = true
+				element.Hash = m.r.RandomString(20)
+				m.Lock()
+				m.EndStock = append(m.EndStock, element)
+				m.Unlock()
+
 				fmt.Printf(fmt.Sprintf("[%d] %v `%s`\n", m.counter, name, element))
 				time.Sleep(time.Second * 1)
 			} else {
